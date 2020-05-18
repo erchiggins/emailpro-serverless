@@ -142,20 +142,7 @@ function decode(content) {
         }
         mdString += mdLine;
     }
-    mdString = mdString.replace(/=C2/g, ' ');
-    mdString = mdString.replace(/=A0/g, ' ');
-    mdString = mdString.replace(/=C2=A0/g, ' ');
-    mdString = mdString.replace(/=C3=A9/g, '&#233;')
-    mdString = mdString.replace(/=20/g, ' ');
-    mdString = mdString.replace(/=E2=80=93/g, '-');
-    mdString = mdString.replace(/=E2=80=94/g, '');
-    mdString = mdString.replace(/=E2=80=99/g, "'");
-    mdString = mdString.replace(/=E2=80=9C/g, '');
-    mdString = mdString.replace(/=E2=80=9D/g, '');
-    mdString = mdString.replace(/=([0-9a-fA-F]{2})/g, (stringmatched, encoded) => {
-        const intval = parseInt(encoded, 16);
-        return String.fromCharCode(intval);
-    });
+    mdString = parseEncoded(mdString);
     let timesent = "";
     let body = "";
     if (mdString.includes('---------- Forwarded message ---------')) {
@@ -191,6 +178,68 @@ function decode(content) {
     }
     return toReturn;
 }
+
+function parseEncoded(toParse) {
+
+    console.log(toParse);
+    // standalones
+    toParse = toParse.replace(/=([0-7][0-9a-fA-F])/g, (encoded) => {
+        return String.fromCodePoint(parseInt(encoded.substring(1), 16));
+    });
+    // two byte sequences
+    toParse = toParse.replace(/=([c-dC-D][0-9a-fA-F])=([8-9a-bA-B][0-9a-fA-F])/g, (encoded) => {
+        const bytes = encoded.split('=');
+        const binBytes = [];
+        bytes.forEach((item) => {
+            if (item) {
+                binBytes.push(parseInt(item, 16).toString(2));
+            }
+        });
+        // leading byte, in format 110xxxxx
+        let binString = binBytes[0].substring(3);
+        // second byte, in format 10xxxxxx
+        binString += binBytes[1].substring(2);
+        return '&#' + parseInt(binString, 2).toString();
+    });
+    // three byte sequences
+    toParse = toParse.replace(/=[eE][0-9a-fA-F]=[8-9a-bA-B][0-9a-fA-F]=[8-9a-bA-B][0-9a-fA-F]/g, (encoded) => {
+        const bytes = encoded.split('=');
+        const binBytes = [];
+        bytes.forEach((item) => {
+            if (item) {
+                binBytes.push(parseInt(item, 16).toString(2));
+            }
+        });
+        // leading byte, in format 1110xxxx
+        let binString = binBytes[0].substring(4);
+        // second byte, in format 10xxxxxx
+        binString += binBytes[1].substring(2);
+        // third byte, in format 10xxxxxx
+        binString += binBytes[2].substring(2);
+        return '&#' + parseInt(binString, 2).toString();
+    });
+    // four byte sequences
+    toParse = toParse.replace(/=[fF][0-7]=[8-9a-bA-B][0-9a-fA-F]=[8-9a-bA-B][0-9a-fA-F]=[8-9a-bA-B][0-9a-fA-F]/g, (encoded) => {
+        const bytes = encoded.split('=');
+        const binBytes = [];
+        bytes.forEach((item) => {
+            if (item) {
+                binBytes.push(parseInt(item, 16).toString(2));
+            }
+        });
+        // leading byte, in format 11110xxx
+        let binString = binBytes[0].substring(5);
+        // second byte, in format 10xxxxxx
+        binString += binBytes[1].substring(2);
+        // third byte, in format 10xxxxxx
+        binString += binBytes[2].substring(2);
+        // fourth byte, in format 10xxxxxx
+        binString += binBytes[3].substring(2);
+        return '&#' + parseInt(binString, 2).toString();
+    });
+    return toParse;
+}
+
 
 function processDate(timestring) {
     let timetoreturn = {
