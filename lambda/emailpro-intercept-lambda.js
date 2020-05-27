@@ -158,23 +158,32 @@ function decode(content) {
         timesent = timesent.substring(6);
         body = mdString;
     }
+    body = body.replace(/topics:*(.+)---/, '');
     toReturn.date = processDate(timesent);
     toReturn.markdown = body;
     // extract topics
-    let stepsback = 0;
-    let hitContent = false;
-    while (!hitContent) {
-        let line = lines[marks.markStart - 1 - stepsback];
-        if (line.length > 1) {
-            hitContent = true;
+    let hitBottomOfTopics = false;
+    let topicString = '';
+    // step through plaintext lines from bottom to top
+    for (let k = parseInt(marks.markStart); k > parseInt(marks.plainStart); k--) {
+        let line = lines[k];
+        if (!hitBottomOfTopics && line.trim() === '---') {
+            // encountered delimiter at end of topic lines
+            hitBottomOfTopics = true;
+        } else if (hitBottomOfTopics) {
             if (line.substring(0, 8) === 'topics: ') {
-                const tlist = line.substring(8).split(',');
-                for (let t in tlist) {
-                    toReturn.topics.push(tlist[t].trim());
-                }
+                // encountered delimiter at top of topic lines
+                topicString = line.substring(8) + topicString;
+                break;
+            } else {
+                // encountered one line of a multiline topics section
+                topicString = line + topicString;
             }
         }
-        stepsback += 1;
+    }
+    const tlist = topicString.split(',');
+    for (let t in tlist) {
+        toReturn.topics.push(tlist[t].trim());
     }
     return toReturn;
 }
