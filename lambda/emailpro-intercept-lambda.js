@@ -135,10 +135,10 @@ function decode(content) {
     let mdString = "";
     for (let m = m0; m < m1; m++) {
         let mdLine = lines[m];
-        if (mdLine.length === 77) {
-            mdLine = mdLine.substring(0, 75);
+        if (m < m1 - 1 && mdLine.charAt(mdLine.length - 2) === '=') {
+            mdLine = mdLine.substring(0, mdLine.length - 2);
         } else {
-            mdLine = mdLine.replace(/\r/, '');
+            mdLine = mdLine.substring(0, mdLine.length - 1);
         }
         mdString += mdLine;
     }
@@ -188,6 +188,7 @@ function decode(content) {
     return toReturn;
 }
 
+
 function parseEncoded(toParse) {
 
     console.log(toParse);
@@ -208,7 +209,7 @@ function parseEncoded(toParse) {
         let binString = binBytes[0].substring(3);
         // second byte, in format 10xxxxxx
         binString += binBytes[1].substring(2);
-        return '&#' + parseInt(binString, 2).toString();
+        return `&#${parseInt(binString, 2).toString()};`;
     });
     // three byte sequences
     toParse = toParse.replace(/=[eE][0-9a-fA-F]=[8-9a-bA-B][0-9a-fA-F]=[8-9a-bA-B][0-9a-fA-F]/g, (encoded) => {
@@ -225,7 +226,7 @@ function parseEncoded(toParse) {
         binString += binBytes[1].substring(2);
         // third byte, in format 10xxxxxx
         binString += binBytes[2].substring(2);
-        return '&#' + parseInt(binString, 2).toString();
+        return `&#${parseInt(binString, 2).toString()};`;
     });
     // four byte sequences
     toParse = toParse.replace(/=[fF][0-7]=[8-9a-bA-B][0-9a-fA-F]=[8-9a-bA-B][0-9a-fA-F]=[8-9a-bA-B][0-9a-fA-F]/g, (encoded) => {
@@ -244,7 +245,7 @@ function parseEncoded(toParse) {
         binString += binBytes[2].substring(2);
         // fourth byte, in format 10xxxxxx
         binString += binBytes[3].substring(2);
-        return '&#' + parseInt(binString, 2).toString();
+        return `&#${parseInt(binString, 2).toString()};`;
     });
     return toParse;
 }
