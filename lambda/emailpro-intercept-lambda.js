@@ -151,8 +151,10 @@ function decode(content) {
         const dateIndex = timechunk.indexOf('<br>Date: ');
         const subjIndex = timechunk.indexOf('<br>Subject: ');
         timesent = timechunk.substring(dateIndex + 10, subjIndex);
-        const startBody = timechunk.indexOf('<div dir="ltr">');
-        body = timechunk.substring(startBody, mdString.length - ((chunks.length - 1) * 6));
+        const recipIndex = timechunk.indexOf('<br<To:');
+        body = timechunk.substring(recipIndex);
+        const startContent = body.indexOf('<div');
+        body = body.substring(startContent, mdString.length - ((chunks.length - 1) * 6));
     } else {
         timesent = lines[marks.plainStart - 6];
         timesent = timesent.substring(6);
@@ -181,9 +183,11 @@ function decode(content) {
             }
         }
     }
-    const tlist = topicString.split(',');
-    for (let t in tlist) {
-        toReturn.topics.push(tlist[t].trim());
+    if (topicString.length) {
+        const tlist = topicString.split(',');
+        for (let t in tlist) {
+            toReturn.topics.push(tlist[t].trim());
+        }
     }
     return toReturn;
 }
