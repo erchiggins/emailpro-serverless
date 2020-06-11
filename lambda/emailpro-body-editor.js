@@ -13,33 +13,42 @@ exports.handler = async(event) => {
         }
         const rawContent = message.content;
         const content = decode(rawContent);
-        console.log(content);
-        const item = {
-            "timestamp": { S: content.date.timestamp },
-            "subject": { S: subject },
-            "sender": { S: sender },
-            "plaintext": { SS: Array.from(content.plaintext) },
-            "markdown": { S: '' + content.markdown }
+        const archiveSearchParams = {
+            Key: {
+                "subject": {
+                    S: subject
+                }
+            },
+            TableName: "EmailProArchive"
         };
-        const archiveItem = {
-            "timestamp": { S: content.date.timestamp },
-            "subject": { S: subject },
-            "year": { N: content.date.year + '' },
-            "month": { N: content.date.month + '' },
-            "day": { N: content.date.day + '' }
-        };
-        const saveparams = {
-            TableName: "EmailProMessages",
-            Item: item,
-            ReturnConsumedCapacity: "TOTAL"
-        };
-        const saved = await ddb.putItem(saveparams, function(err, data) {
+        console.log(`searching for message with subject ${subject}`);
+        let archivedMessage;
+        await ddb.getItem(archiveSearchParams, function(err, data) {
+            console.log(data);
             if (err) {
                 console.log(err);
-            } else {
-                console.log(data);
+            } else if (data.Item) {
+                console.log("retrieved existing message: ");
+                console.log(data.Item);
+                archivedMessage = data.Item;
             }
         }).promise();
+        if (archivedMessage) {
+            // response was not null, corresponding record was found
+            // are we changing the subject? 
+            if (subject === content.subject) {
+                // if no, remove topics by subject and save fresh message, archive, topics
+                await deleteBySubject(subject);
+                await saveFreshEmail(sender, content);
+            } else {
+                // if yes, remove topics by subject, remove old msg and archive, save all fresh with new subject 
+                await deleteBySubject(subject, true);
+                await saveFreshEmail(sender, content);
+            }
+        } else {
+            await saveFreshEmail(sender, content);
+        }
+
     } else {
         return 'unrecognized sender';
     }
@@ -55,6 +64,7 @@ function decode(content) {
             day: 0,
             timestamp: ""
         },
+        subject: "",
         plaintext: new Set(),
         markdown: "",
         topics: []
@@ -101,10 +111,10 @@ function decode(content) {
     let mdString = "";
     for (let m = m0; m < m1; m++) {
         let mdLine = lines[m];
-        if (mdLine.length === 77) {
-            mdLine = mdLine.substring(0, 75);
+        if (m < m1 - 1 && mdLine.charAt(mdLine.length - 2) === '=') {
+            mdLine = mdLine.substring(0, mdLine.length - 2);
         } else {
-            mdLine = mdLine.replace(/\r/, '');
+            mdLine = mdLine.substring(0, mdLine.length - 1);
         }
         mdString += mdLine;
     }
@@ -116,31 +126,45 @@ function decode(content) {
         let timechunk = chunks[chunks.length - 1];
         const dateIndex = timechunk.indexOf('<br>Date: ');
         const subjIndex = timechunk.indexOf('<br>Subject: ');
+        const recipIndex = timechunk.indexOf('<br>To:');
+        toReturn.subject = timechunk.substring(subjIndex + 13, recipIndex).replace(/Fwd:/g, '').trim();
         timesent = timechunk.substring(dateIndex + 10, subjIndex);
-        const startBody = timechunk.indexOf('<div dir="ltr">');
-        body = timechunk.substring(startBody, mdString.length - ((chunks.length - 1) * 6));
+        body = timechunk.substring(recipIndex);
+        const startContent = body.indexOf('<div');
+        body = body.substring(startContent, mdString.length - ((chunks.length - 1) * 6));
     } else {
         timesent = lines[marks.plainStart - 6];
         timesent = timesent.substring(6);
         body = mdString;
     }
+    body = body.replace(/topics:*(.+)---/, '');
     toReturn.date = processDate(timesent);
     toReturn.markdown = body;
     // extract topics
-    let stepsback = 0;
-    let hitContent = false;
-    while (!hitContent) {
-        let line = lines[marks.markStart - 1 - stepsback];
-        if (line.length > 1) {
-            hitContent = true;
+    let hitBottomOfTopics = false;
+    let topicString = '';
+    // step through plaintext lines from bottom to top
+    for (let k = parseInt(marks.markStart); k > parseInt(marks.plainStart); k--) {
+        let line = lines[k];
+        if (!hitBottomOfTopics && line.trim() === '---') {
+            // encountered delimiter at end of topic lines
+            hitBottomOfTopics = true;
+        } else if (hitBottomOfTopics) {
             if (line.substring(0, 8) === 'topics: ') {
-                const tlist = line.substring(8).split(',');
-                for (let t in tlist) {
-                    toReturn.topics.push(tlist[t].trim());
-                }
+                // encountered delimiter at top of topic lines
+                topicString = line.substring(8) + topicString;
+                break;
+            } else {
+                // encountered one line of a multiline topics section
+                topicString = line + topicString;
             }
         }
-        stepsback += 1;
+    }
+    if (topicString.length) {
+        const tlist = topicString.split(',');
+        for (let t in tlist) {
+            toReturn.topics.push(tlist[t].trim());
+        }
     }
     return toReturn;
 }
@@ -165,7 +189,7 @@ function parseEncoded(toParse) {
         let binString = binBytes[0].substring(3);
         // second byte, in format 10xxxxxx
         binString += binBytes[1].substring(2);
-        return '&#' + parseInt(binString, 2).toString();
+        return `&#${parseInt(binString, 2).toString()};`;
     });
     // three byte sequences
     toParse = toParse.replace(/=[eE][0-9a-fA-F]=[8-9a-bA-B][0-9a-fA-F]=[8-9a-bA-B][0-9a-fA-F]/g, (encoded) => {
@@ -182,7 +206,7 @@ function parseEncoded(toParse) {
         binString += binBytes[1].substring(2);
         // third byte, in format 10xxxxxx
         binString += binBytes[2].substring(2);
-        return '&#' + parseInt(binString, 2).toString();
+        return `&#${parseInt(binString, 2).toString()};`;
     });
     // four byte sequences
     toParse = toParse.replace(/=[fF][0-7]=[8-9a-bA-B][0-9a-fA-F]=[8-9a-bA-B][0-9a-fA-F]=[8-9a-bA-B][0-9a-fA-F]/g, (encoded) => {
@@ -201,11 +225,10 @@ function parseEncoded(toParse) {
         binString += binBytes[2].substring(2);
         // fourth byte, in format 10xxxxxx
         binString += binBytes[3].substring(2);
-        return '&#' + parseInt(binString, 2).toString();
+        return `&#${parseInt(binString, 2).toString()};`;
     });
     return toParse;
 }
-
 
 function processDate(timestring) {
     let timetoreturn = {
@@ -256,4 +279,134 @@ function processDate(timestring) {
     timetoreturn.year = year;
     timetoreturn.day = day;
     return timetoreturn;
+}
+
+async function saveFreshEmail(sender, content) {
+    const item = {
+        "timestamp": { S: content.date.timestamp },
+        "subject": { S: content.subject },
+        "sender": { S: sender },
+        "plaintext": { SS: Array.from(content.plaintext) },
+        "markdown": { S: '' + content.markdown }
+    };
+    const archiveItem = {
+        "timestamp": { S: content.date.timestamp },
+        "subject": { S: content.subject },
+        "year": { N: content.date.year + '' },
+        "month": { N: content.date.month + '' },
+        "day": { N: content.date.day + '' }
+    };
+    const saveparams = {
+        TableName: "EmailProMessages",
+        Item: item,
+        ReturnConsumedCapacity: "TOTAL"
+    };
+    await ddb.putItem(saveparams, function(err, data) {
+        if (err) {
+            console.log(err);
+        } else {
+            console.log("saved message: ");
+            console.log(item);
+        }
+    }).promise();
+    const archiveparams = {
+        TableName: "EmailProArchive",
+        Item: archiveItem,
+        ReturnConsumedCapacity: "TOTAL"
+    };
+    await ddb.putItem(archiveparams, function(err, data) {
+        if (err) {
+            console.log(err);
+        } else {
+            console.log("saved archive data: ");
+            console.log(archiveItem);
+        }
+    }).promise();
+    for (let topic of content.topics) {
+        const topicparams = {
+            TableName: "EmailProTopics",
+            Key: {
+                "topicname": {
+                    S: topic
+                }
+            },
+            UpdateExpression: "ADD emails :attrValue",
+            ExpressionAttributeValues: {
+                ":attrValue": { "SS": [content.subject] }
+            },
+            ReturnConsumedCapacity: "TOTAL"
+        };
+        await ddb.updateItem(topicparams, function(err, data) {
+            if (err) {
+                console.log(err);
+            } else {
+                console.log(`saved message under topic: ${topic}`);
+            }
+        }).promise();
+    }
+}
+
+async function deleteBySubject(subject, fullDeletion) {
+    if (fullDeletion) {
+        const delMessageParams = {
+            Key: {
+                "subject": {
+                    S: subject
+                }
+            },
+            TableName: "EmailProMessages"
+        };
+        await ddb.deleteItem(delMessageParams, function(err, data) {
+            if (err) console.log(err);
+            else console.log(`deleted message: ${subject}`);
+        }).promise();
+        const delArchiveParams = {
+            Key: {
+                "subject": {
+                    S: subject
+                }
+            },
+            TableName: "EmailProArchive"
+        };
+        await ddb.deleteItem(delArchiveParams, function(err, data) {
+            if (err) console.log(err);
+            else console.log(`deleted archive entry: ${subject}`);
+        }).promise();
+    }
+    // only remove topics 
+    const scanParams = {
+        ExpressionAttributeValues: {
+            ":s": {
+                S: subject
+            }
+        },
+        FilterExpression: "contains(emails, :s)",
+        TableName: "EmailProTopics"
+    };
+    let scannedTopics;
+    await ddb.scan(scanParams, function(err, data) {
+        if (err) console.log(err);
+        else scannedTopics = data.Items;
+    }).promise();
+    for (let item of scannedTopics) {
+        const updateParams = {
+            Key: {
+                "topicname": {
+                    S: item.topicname.S
+                }
+            },
+            ExpressionAttributeValues: {
+                ":s": {
+                    SS: [subject]
+                }
+            },
+            UpdateExpression: "DELETE emails :s",
+            ReturnValues: "ALL_NEW",
+            TableName: "EmailProTopics"
+        };
+        await ddb.updateItem(updateParams, function(err, data) {
+            if (err) console.log(err);
+            else console.log(`removed ${subject} from topic ${item.topicname.S}`);
+        }).promise();
+    }
 }
