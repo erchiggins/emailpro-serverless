@@ -13,42 +13,17 @@ exports.handler = async(event) => {
         }
         const rawContent = message.content;
         const content = decode(rawContent);
-        const archiveSearchParams = {
-            Key: {
-                "subject": {
-                    S: subject
-                }
-            },
-            TableName: "EmailProArchive"
-        };
-        console.log(`searching for message with subject ${subject}`);
-        let archivedMessage;
-        await ddb.getItem(archiveSearchParams, function(err, data) {
-            console.log(data);
-            if (err) {
-                console.log(err);
-            } else if (data.Item) {
-                console.log("retrieved existing message: ");
-                console.log(data.Item);
-                archivedMessage = data.Item;
-            }
-        }).promise();
-        if (archivedMessage) {
-            // response was not null, corresponding record was found
-            // are we changing the subject? 
-            if (subject === content.subject) {
-                // if no, remove topics by subject and save fresh message, archive, topics
-                await deleteBySubject(subject);
-                await saveFreshEmail(sender, content);
-            } else {
-                // if yes, remove topics by subject, remove old msg and archive, save all fresh with new subject 
-                await deleteBySubject(subject, true);
-                await saveFreshEmail(sender, content);
-            }
+        // are we changing the subject?
+        const numSubjects = content.subjectList.length;
+        if (numSubjects === 1 || content.subjectList[numSubjects - 2] === content.subjectList[content.numSubjects - 1]) {
+            // if no, remove topics by subject and save fresh message, archive, topics
+            await deleteBySubject(content.subjectList[numSubjects - 1]);
+            await saveFreshEmail(sender, content);
         } else {
+            // if yes, remove topics by subject, remove old msg and archive, save all fresh with new subject 
+            await deleteBySubject(content.subjectList[numSubjects - 2], true);
             await saveFreshEmail(sender, content);
         }
-
     } else {
         return 'unrecognized sender';
     }
@@ -64,7 +39,7 @@ function decode(content) {
             day: 0,
             timestamp: ""
         },
-        subject: "",
+        subjectList: [],
         plaintext: new Set(),
         markdown: "",
         topics: []
@@ -123,15 +98,19 @@ function decode(content) {
     let body = "";
     if (mdString.includes('---------- Forwarded message ---------')) {
         let chunks = mdString.split('---------- Forwarded message ---------');
-        let timechunk = chunks[chunks.length - 1];
-        const dateIndex = timechunk.indexOf('<br>Date: ');
-        const subjIndex = timechunk.indexOf('<br>Subject: ');
-        const recipIndex = timechunk.indexOf('<br>To:');
-        toReturn.subject = timechunk.substring(subjIndex + 13, recipIndex).replace(/Fwd:/g, '').trim();
-        timesent = timechunk.substring(dateIndex + 10, subjIndex);
-        body = timechunk.substring(recipIndex);
-        const startContent = body.indexOf('<div');
-        body = body.substring(startContent, mdString.length - ((chunks.length - 1) * 6));
+        for (let chunk of chunks) {
+            const subjIndex = chunk.indexOf('<br>Subject: ');
+            const recipIndex = chunk.indexOf('<br>To:');
+            toReturn.subjectList.push(chunk.substring(subjIndex + 13, recipIndex).replace(/Fwd:/g, '').trim());
+            // extract archival date from final chunk
+            if (chunk === chunks[chunks.length - 1]) {
+                const dateIndex = chunk.indexOf('<br>Date: ');
+                timesent = chunk.substring(dateIndex + 10, subjIndex);
+                body = chunk.substring(recipIndex);
+                const startContent = body.indexOf('<div');
+                body = body.substring(startContent, mdString.length - ((chunks.length - 1) * 6));
+            }
+        }
     } else {
         timesent = lines[marks.plainStart - 6];
         timesent = timesent.substring(6);
@@ -282,16 +261,17 @@ function processDate(timestring) {
 }
 
 async function saveFreshEmail(sender, content) {
+    const newSubj = content.subjectList[content.subjectList.length - 1];
     const item = {
         "timestamp": { S: content.date.timestamp },
-        "subject": { S: content.subject },
+        "subject": { S: newSubj },
         "sender": { S: sender },
         "plaintext": { SS: Array.from(content.plaintext) },
         "markdown": { S: '' + content.markdown }
     };
     const archiveItem = {
         "timestamp": { S: content.date.timestamp },
-        "subject": { S: content.subject },
+        "subject": { S: newSubj },
         "year": { N: content.date.year + '' },
         "month": { N: content.date.month + '' },
         "day": { N: content.date.day + '' }
@@ -332,7 +312,7 @@ async function saveFreshEmail(sender, content) {
             },
             UpdateExpression: "ADD emails :attrValue",
             ExpressionAttributeValues: {
-                ":attrValue": { "SS": [content.subject] }
+                ":attrValue": { "SS": [newSubj] }
             },
             ReturnConsumedCapacity: "TOTAL"
         };
@@ -354,7 +334,7 @@ async function deleteBySubject(subject, fullDeletion) {
                     S: subject
                 }
             },
-            TableName: "EmailProMessages"
+            TableName: "TestMail"
         };
         await ddb.deleteItem(delMessageParams, function(err, data) {
             if (err) console.log(err);
@@ -366,7 +346,7 @@ async function deleteBySubject(subject, fullDeletion) {
                     S: subject
                 }
             },
-            TableName: "EmailProArchive"
+            TableName: "TestArchive"
         };
         await ddb.deleteItem(delArchiveParams, function(err, data) {
             if (err) console.log(err);
@@ -381,7 +361,7 @@ async function deleteBySubject(subject, fullDeletion) {
             }
         },
         FilterExpression: "contains(emails, :s)",
-        TableName: "EmailProTopics"
+        TableName: "TestTopics"
     };
     let scannedTopics;
     await ddb.scan(scanParams, function(err, data) {
@@ -402,7 +382,7 @@ async function deleteBySubject(subject, fullDeletion) {
             },
             UpdateExpression: "DELETE emails :s",
             ReturnValues: "ALL_NEW",
-            TableName: "EmailProTopics"
+            TableName: "TestTopics"
         };
         await ddb.updateItem(updateParams, function(err, data) {
             if (err) console.log(err);
