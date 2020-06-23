@@ -5,11 +5,11 @@ exports.handler = async(event) => {
     let responseStatus = 200;
     let responseBody = "";
     const resource = event.resource;
-
+    console.log(event);
     if (resource.substring(1, 8) === 'archive') {
-        const subject = decodeURI(event.pathParameters.subject);
+        const subject = (event.pathParameters) ? decodeURI(event.pathParameters.subject).replace(/\+/g, ' ') : null;
         responseBody = await retrieveArchive(subject);
-    } else if (resource === 'topics') {
+    } else if (resource.substring(1) === 'topics') {
         responseBody = await retrieveTopics();
     } else {
         responseStatus = 400;
@@ -37,8 +37,8 @@ async function retrieveArchive(subject) {
                 }
             },
             TableName: "EmailProMessages"
-        }
-        const result = await ddb.getItem(params, function(err, data) {
+        };
+        await ddb.getItem(params, function(err, data) {
             if (err) {
                 console.log(err);
             } else {
@@ -47,15 +47,15 @@ async function retrieveArchive(subject) {
                         subject: subject,
                         timestamp: data.Item.timestamp.S,
                         markdown: data.Item.markdown.S
-                    }
+                    };
                 }
             }
         }).promise();
     } else {
         const params = {
             TableName: "EmailProArchive"
-        }
-        const result = await ddb.scan(params, function(err, data) {
+        };
+        await ddb.scan(params, function(err, data) {
             if (err) {
                 console.log(err);
             } else {
@@ -69,7 +69,7 @@ async function retrieveArchive(subject) {
 function composeArchiveResponse(data) {
     let archive = {
         years: []
-    }
+    };
     let currYear, currMonth, yearsFound, monthsFound;
     for (let item of data.Items) {
         yearsFound = archive.years.filter(data => (data.year === parseInt(item.year.N)));
@@ -123,8 +123,8 @@ async function retrieveTopics() {
     let toReturn = null;
     const params = {
         TableName: "EmailProTopics"
-    }
-    const result = await ddb.scan(params, function(err, data) {
+    };
+    await ddb.scan(params, function(err, data) {
         if (err) {
             console.log(err);
         } else {
