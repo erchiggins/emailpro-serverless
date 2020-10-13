@@ -53,26 +53,28 @@ exports.handler = async(event) => {
             }
         }).promise();
         for (let topic in content.topics) {
-            const topicparams = {
-                TableName: "EmailProTopics",
-                Key: {
-                    "topicname": {
-                        S: content.topics[topic]
+            if (topic.length > 0) {
+                const topicparams = {
+                    TableName: "EmailProTopics",
+                    Key: {
+                        "topicname": {
+                            S: content.topics[topic]
+                        }
+                    },
+                    UpdateExpression: "ADD emails :attrValue",
+                    ExpressionAttributeValues: {
+                        ":attrValue": { "SS": [subject] }
+                    },
+                    ReturnConsumedCapacity: "TOTAL"
+                };
+                const updatedtopic = await ddb.updateItem(topicparams, function(err, data) {
+                    if (err) {
+                        console.log(err);
+                    } else {
+                        console.log(data);
                     }
-                },
-                UpdateExpression: "ADD emails :attrValue",
-                ExpressionAttributeValues: {
-                    ":attrValue": { "SS": [subject] }
-                },
-                ReturnConsumedCapacity: "TOTAL"
-            };
-            const updatedtopic = await ddb.updateItem(topicparams, function(err, data) {
-                if (err) {
-                    console.log(err);
-                } else {
-                    console.log(data);
-                }
-            }).promise();
+                }).promise();
+            }
         }
     } else {
         return 'unrecognized sender';
@@ -149,7 +151,7 @@ function decode(content) {
         let chunks = mdString.split('---------- Forwarded message ---------');
         let timechunk = chunks[chunks.length - 1];
         const dateIndex = timechunk.indexOf('<br>Date: ');
-        const subjIndex = timechunk.indexOf('<br>Subject: ');
+        let subjIndex = timechunk.indexOf('<br>Subject:');
         timesent = timechunk.substring(dateIndex + 10, subjIndex);
         const recipIndex = timechunk.indexOf('<br<To:');
         body = timechunk.substring(recipIndex);
@@ -183,7 +185,7 @@ function decode(content) {
             }
         }
     }
-    if (topicString.length) {
+    if (topicString.length > 0) {
         const tlist = topicString.split(',');
         for (let t in tlist) {
             toReturn.topics.push(tlist[t].trim());
@@ -261,7 +263,7 @@ function processDate(timestring) {
         month: 0,
         day: 0,
         timestamp: ""
-    }
+    };
     timestring = timestring.replace(':', ' ');
     let dateParts = timestring.split(' ');
     let year = parseInt(dateParts[3]);

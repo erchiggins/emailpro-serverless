@@ -7,7 +7,7 @@ exports.handler = async(event) => {
     const resource = event.resource;
     console.log(event);
     if (resource.substring(1, 8) === 'archive') {
-        const subject = (event.pathParameters) ? decodeURI(event.pathParameters.subject).replace(/\+/g, ' ') : null;
+        const subject = (event.pathParameters) ? decodeURIComponent(event.pathParameters.subject).replace(/\+/g, ' ') : null;
         responseBody = await retrieveArchive(subject);
     } else if (resource.substring(1) === 'topics') {
         responseBody = await retrieveTopics();
